@@ -1,7 +1,4 @@
-import { SYSTEM_PROMPT, buildUserPrompt } from './prompt';
-
 type EvaluationResult = {
-  isDemo?: boolean;
   scores: {
     curriculum: number;
     eyeLevel: number;
@@ -11,74 +8,104 @@ type EvaluationResult = {
   improvements: string[];
 };
 
-function hasUsableApiKey(value: string | undefined) {
-  const key = value?.trim();
-  return Boolean(key) && !['undefined', 'null'].includes(key!.toLowerCase());
+const SYSTEM_PROMPT = `
+You are an expert mathematics education evaluator for pre-service middle-school math teachers.
+
+Evaluate the teacher answer to a student's mathematical misconception.
+
+Score each criterion from 0 to 100:
+
+1. curriculum
+- Mathematical correctness and alignment with the achievement standard.
+- No new misconceptions.
+- Appropriate middle-school mathematical language.
+
+2. eyeLevel
+- Understandable to a first-time middle-school learner.
+- Avoids unnecessary advanced terminology or formal proof.
+- Uses an accessible example, substitution, comparison, or check when useful.
+
+3. flow
+- Acknowledges why the student may think that way.
+- Connects the misconception to the correct concept.
+- Organized and step-by-step.
+
+Very short, joking, meaningless, or non-mathematical answers must receive very low scores.
+Return Korean feedback.
+Return only valid JSON with this exact shape:
+
+{
+  "scores": {
+    "curriculum": 0,
+    "eyeLevel": 0,
+    "flow": 0
+  },
+  "strengths": ["..."],
+  "improvements": ["..."]
+}
+`;
+
+function buildUserPrompt(input: {
+  achievementStandard: string;
+  studentUtterance: string;
+  context: string;
+  exemplarAnswer: string;
+  userAnswer: string;
+}) {
+  return `
+[Evaluation target]
+- Achievement standard: ${input.achievementStandard}
+- Student utterance: "${input.studentUtterance}"
+- Misconception context: ${input.context}
+- Reference model answer: ${input.exemplarAnswer}
+- Teacher answer to evaluate: "${input.userAnswer}"
+
+Evaluate only the teacher answer. Return valid JSON only.
+`;
 }
 
-function buildDemoEvaluation(userAnswer: string, reason?: string): EvaluationResult {
-  const answer = String(userAnswer).trim();
-  const meaningfulChars = answer.replace(/[\s.,!?~'"()\[\]{}<>:;|\\/_+=*-]/g, '');
-  const longEnoughExplanation = meaningfulChars.length >= 20;
-  const hasMathTerm =
-    /square|root|sqrt|equation|function|factor|expand|sign|graph|vertex|solution|answer|x|y|\d|\u221a|\u00b2|\u03c0|\uc81c\uacf1|\uadfc\ud638|\ub8e8\ud2b8|\ubc29\uc815\uc2dd|\ud568\uc218|\uc778\uc218\ubd84\ud574|\uc804\uac1c|\ubd80\ud638|\uadf8\ub798\ud504|\uaf2d\uc9d3\uc810|\ud574/i.test(
-      answer,
-    );
-  const acknowledgesStudent =
-    /yes|right|good question|understand|confus|think|first|student|can see|\ub9de\uc544|\uadf8\ub807\uac8c \uc0dd\uac01|\ud5f7\uac08|\uc88b\uc740 \uc9c8\ubb38|\uc774\ud574|\uba3c\uc800|\uc0dd\uac01\ud560 \uc218/i.test(
-      answer,
-    );
-  const hasCorrection =
-    /but|however|because|therefore|so|not|instead|actually|\ud558\uc9c0\ub9cc|\uadf8\ub7f0\ub370|\ub2e4\ub9cc|\uc544\ub2c8\ub77c|\uc65c\ub0d0\ud558\uba74|\ub530\ub77c\uc11c|\uadf8\ub798\uc11c/i.test(
-      answer,
-    );
-  const hasExample =
-    /example|substitute|plug|check|for instance|when|if|\uc608\ub97c|\uc608\uc2dc|\ub300\uc785|\ud655\uc778|\ubcf4\uba74|\d/i.test(
-      answer,
-    );
-  const isTooShort = meaningfulChars.length < 12;
+function getApiKey() {
+  const key = process.env.OPENAI_API_KEY?.trim();
+  if (!key || ['undefined', 'null'].includes(key.toLowerCase())) {
+    return null;
+  }
+  return key;
+}
 
-  if (isTooShort || (!hasMathTerm && !longEnoughExplanation)) {
-    return {
-      isDemo: true,
-      scores: {
-        curriculum: isTooShort ? 5 : 15,
-        eyeLevel: acknowledgesStudent ? 20 : 5,
-        flow: hasCorrection ? 20 : 5,
-      },
-      strengths: ['The answer is too short to show a meaningful mathematical explanation yet.'],
-      improvements: [
-        'State the student misconception first, then explain the correct idea in at least one or two complete sentences.',
-        'Include a mathematical term, a short example, and a student-friendly acknowledgement.',
-        reason ? `Fallback note: ${reason}` : 'Fallback note: local demo evaluation was used.',
-      ],
-    };
+function parseEvaluation(content: string): EvaluationResult {
+  const cleaned = content
+    .trim()
+    .replace(/^```json\s*/i, '')
+    .replace(/^```\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim();
+
+  const parsed = JSON.parse(cleaned);
+  const scores = parsed?.scores;
+
+  if (
+    typeof scores?.curriculum !== 'number' ||
+    typeof scores?.eyeLevel !== 'number' ||
+    typeof scores?.flow !== 'number' ||
+    !Array.isArray(parsed?.strengths) ||
+    !Array.isArray(parsed?.improvements)
+  ) {
+    throw new Error('OpenAI returned JSON, but it did not match the expected evaluation schema.');
   }
 
-  const lengthScore = Math.min(30, Math.floor(meaningfulChars.length / 4));
-  const curriculum = Math.min(100, 30 + lengthScore + (hasMathTerm ? 25 : 10) + (hasCorrection ? 15 : 0));
-  const eyeLevel = Math.min(100, 25 + lengthScore + (acknowledgesStudent ? 20 : 0) + (hasExample ? 20 : 0));
-  const flow = Math.min(100, 25 + lengthScore + (acknowledgesStudent ? 15 : 0) + (hasCorrection ? 20 : 0));
-
   return {
-    isDemo: true,
     scores: {
-      curriculum,
-      eyeLevel,
-      flow,
+      curriculum: Math.max(0, Math.min(100, Math.round(scores.curriculum))),
+      eyeLevel: Math.max(0, Math.min(100, Math.round(scores.eyeLevel))),
+      flow: Math.max(0, Math.min(100, Math.round(scores.flow))),
     },
-    strengths: [
-      'The response attempts to connect to the student answer and provide a mathematical explanation.',
-      hasExample
-        ? 'It includes an example or check that can help the student follow the idea.'
-        : 'It focuses on the core concept.',
-    ],
-    improvements: [
-      reason ? `Fallback note: ${reason}` : 'Fallback note: local demo evaluation was used.',
-      'Acknowledge why the student may have thought that way before correcting the misconception.',
-      'Add a short numerical example or counterexample to make the explanation easier to verify.',
-    ],
+    strengths: parsed.strengths.map(String),
+    improvements: parsed.improvements.map(String),
   };
+}
+
+function sendJson(res: any, status: number, data: unknown) {
+  return res.status(status).json(data);
 }
 
 export default async function handler(req: any, res: any) {
@@ -94,26 +121,25 @@ export default async function handler(req: any, res: any) {
   }
 
   if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method Not Allowed. Use POST.' });
+    return sendJson(res, 405, { error: 'POST 요청만 사용할 수 있습니다.' });
   }
 
   const { achievementStandard, studentUtterance, context, exemplarAnswer, userAnswer } = req.body || {};
 
   if (!achievementStandard || !studentUtterance || !userAnswer) {
-    return res.status(400).json({
-      error: 'Missing required parameters: achievementStandard, studentUtterance, and userAnswer are required.',
+    return sendJson(res, 400, {
+      error: '평가에 필요한 데이터가 부족합니다.',
+    });
+  }
+
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    return sendJson(res, 500, {
+      error: 'OPENAI_API_KEY 환경변수가 배포 환경에 설정되어 있지 않습니다.',
     });
   }
 
   try {
-    const apiKey = hasUsableApiKey(process.env.OPENAI_API_KEY)
-      ? process.env.OPENAI_API_KEY!.trim()
-      : undefined;
-
-    if (!apiKey) {
-      return res.status(200).json(buildDemoEvaluation(userAnswer, 'OPENAI_API_KEY is not configured.'));
-    }
-
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -121,7 +147,7 @@ export default async function handler(req: any, res: any) {
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: 'gpt-4o-mini',
+        model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
         messages: [
           { role: 'system', content: SYSTEM_PROMPT },
           {
@@ -141,27 +167,29 @@ export default async function handler(req: any, res: any) {
     });
 
     if (!response.ok) {
-      const errData = await response.json().catch(() => ({}));
+      const errData = (await response.json().catch(() => ({}))) as any;
+      const message = errData?.error?.message || `OpenAI API 요청이 실패했습니다. status=${response.status}`;
       console.error('OpenAI API Error:', errData);
-      return res.status(200).json(buildDemoEvaluation(userAnswer, `OpenAI request failed with status ${response.status}.`));
+      return sendJson(res, 502, {
+        error: message,
+        status: response.status,
+      });
     }
 
     const data = (await response.json()) as any;
-    const resultString = data.choices?.[0]?.message?.content;
+    const content = data.choices?.[0]?.message?.content;
 
-    if (!resultString) {
-      return res.status(200).json(buildDemoEvaluation(userAnswer, 'OpenAI returned an empty response.'));
+    if (!content) {
+      return sendJson(res, 502, {
+        error: 'OpenAI 응답에 평가 내용이 없습니다.',
+      });
     }
 
-    try {
-      const evaluation = JSON.parse(resultString.trim());
-      return res.status(200).json(evaluation);
-    } catch {
-      console.error('Failed to parse OpenAI JSON output:', resultString);
-      return res.status(200).json(buildDemoEvaluation(userAnswer, 'OpenAI returned invalid JSON.'));
-    }
+    return sendJson(res, 200, parseEvaluation(content));
   } catch (error: any) {
-    console.error('Serverless function error:', error);
-    return res.status(200).json(buildDemoEvaluation(userAnswer, 'Server fallback handled an unexpected error.'));
+    console.error('Evaluation API Error:', error);
+    return sendJson(res, 500, {
+      error: error?.message || '평가 API 실행 중 오류가 발생했습니다.',
+    });
   }
 }
