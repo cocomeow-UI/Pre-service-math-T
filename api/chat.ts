@@ -1,20 +1,86 @@
 import { SYSTEM_PROMPT, buildUserPrompt } from './prompt';
 
+type EvaluationResult = {
+  isDemo?: boolean;
+  scores: {
+    curriculum: number;
+    eyeLevel: number;
+    flow: number;
+  };
+  strengths: string[];
+  improvements: string[];
+};
+
+function hasUsableApiKey(value: string | undefined) {
+  const key = value?.trim();
+  return !!key && !['undefined', 'null'].includes(key.toLowerCase());
+}
+
+function buildDemoEvaluation(userAnswer: string): EvaluationResult {
+  const answer = String(userAnswer).trim();
+  const meaningfulChars = answer.replace(/[\sㅋㅎㅠㅜ.,!?~…'"]/g, '');
+  const hasMathTerm = /제곱|근호|루트|방정식|함수|인수분해|전개|부호|그래프|꼭짓점|해|x|y|π|√|\d/.test(answer);
+  const acknowledgesStudent = /맞아|그렇게 생각|헷갈|좋은 질문|이해|먼저|생각할 수/.test(answer);
+  const hasCorrection = /하지만|그런데|다만|아니라|왜냐하면|따라서|그래서/.test(answer);
+  const hasExample = /예를 들|예시|대입|확인|보면|예를/.test(answer) || /\d/.test(answer);
+  const isTooShort = meaningfulChars.length < 12;
+
+  if (isTooShort || !hasMathTerm) {
+    return {
+      isDemo: true,
+      scores: {
+        curriculum: isTooShort ? 5 : 15,
+        eyeLevel: acknowledgesStudent ? 20 : 5,
+        flow: hasCorrection ? 20 : 5,
+      },
+      strengths: ['아직 평가할 수 있는 수학적 설명이 충분히 드러나지 않았습니다.'],
+      improvements: [
+        '학생의 오개념이 무엇인지 먼저 짚고, 올바른 개념을 한두 문장 이상으로 설명해 주세요.',
+        '수학 용어, 간단한 예시, 학생의 생각을 인정하는 표현이 포함되면 더 정확하게 평가할 수 있습니다.',
+      ],
+    };
+  }
+
+  const lengthScore = Math.min(30, Math.floor(meaningfulChars.length / 4));
+  const curriculum = Math.min(100, 30 + lengthScore + (hasMathTerm ? 25 : 0) + (hasCorrection ? 15 : 0));
+  const eyeLevel = Math.min(100, 25 + lengthScore + (acknowledgesStudent ? 20 : 0) + (hasExample ? 20 : 0));
+  const flow = Math.min(100, 25 + lengthScore + (acknowledgesStudent ? 15 : 0) + (hasCorrection ? 20 : 0));
+
+  return {
+    isDemo: true,
+    scores: {
+      curriculum,
+      eyeLevel,
+      flow,
+    },
+    strengths: [
+      '학생의 답변에 반응하며 수학적 설명을 구성하려는 시도가 보입니다.',
+      hasExample
+        ? '간단한 예시나 대입을 활용해 학생이 확인할 수 있는 설명을 포함했습니다.'
+        : '핵심 개념을 중심으로 답변을 구성했습니다.',
+    ],
+    improvements: [
+      '**[안내]** 현재 `.env.local`에 `OPENAI_API_KEY`가 설정되지 않아 임시 평가 결과가 생성되었습니다.',
+      '학생의 오개념을 먼저 인정한 뒤, 왜 기존 생각이 성립하지 않는지 단계적으로 연결하면 더 좋습니다.',
+      '숫자 대입이나 짧은 반례를 추가하면 학생 눈높이에 더 맞는 설명이 됩니다.',
+    ],
+  };
+}
+
 export default async function handler(req: any, res: any) {
-  // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
     res.setHeader(
       'Access-Control-Allow-Headers',
-      'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version'
+      'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version',
     );
     return res.status(200).end();
   }
 
   if (req.method !== 'POST') {
-    return res.status(451).json({ error: 'Method Not Allowed. Use POST.' });
+    return res.status(405).json({ error: 'Method Not Allowed. Use POST.' });
   }
 
   try {
@@ -26,56 +92,14 @@ export default async function handler(req: any, res: any) {
       });
     }
 
-    const rawApiKey = process.env.OPENAI_API_KEY?.trim();
-    const apiKey =
-      rawApiKey && !['undefined', 'null'].includes(rawApiKey.toLowerCase())
-        ? rawApiKey
-        : undefined;
+    const apiKey = hasUsableApiKey(process.env.OPENAI_API_KEY)
+      ? process.env.OPENAI_API_KEY!.trim()
+      : undefined;
 
-    // Fallback: If no API key is provided, generate a simulated feedback for local testing
     if (!apiKey) {
-      console.warn('OpenAI API Key is missing. Returning a simulated feedback for demonstration.');
-      
-      // Simulate evaluation scores based on user answer length and content presence
-      const userLen = userAnswer.length;
-      let curriculumScore = Math.min(100, Math.max(40, 50 + Math.floor(userLen / 5)));
-      let eyeLevelScore = Math.min(100, Math.max(40, 55 + Math.floor(userLen / 6)));
-      let flowScore = Math.min(100, Math.max(40, 45 + Math.floor(userLen / 4)));
-
-      // Adjust scores if they mention specific elements
-      const hasGreeting = userAnswer.includes('안녕') || userAnswer.includes('맞아') || userAnswer.includes('생각') || userAnswer.includes('그럴 수');
-      if (hasGreeting) {
-        flowScore = Math.min(100, flowScore + 15);
-      }
-
-      const hasExample = userAnswer.includes('예를') || userAnswer.includes('예시') || userAnswer.includes('실제') || userAnswer.includes('숫자');
-      if (hasExample) {
-        eyeLevelScore = Math.min(100, eyeLevelScore + 10);
-      }
-
-      // Predefined template fallback
-      return res.status(200).json({
-        isDemo: true,
-        scores: {
-          curriculum: curriculumScore,
-          eyeLevel: eyeLevelScore,
-          flow: flowScore,
-        },
-        strengths: [
-          '학생의 오개념 원인을 수학적 정의를 통해 정확하게 짚어내기 위해 고민한 흔적이 보입니다.',
-          userAnswer.length > 50 
-            ? '답변에 충분한 양의 설명이 담겨 있어 학생들이 단계적으로 논리를 따라올 수 있도록 배려했습니다.' 
-            : '핵심 설명 위주로 간결하게 구성을 요약했습니다.'
-        ],
-        improvements: [
-          '**[안내]** 현재 `.env.local`에 `OPENAI_API_KEY`가 설정되지 않아 임시 평가 결과가 생성되었습니다. 실시간 AI 피드백을 원하시면 API Key를 연동해 주세요.',
-          '학생의 눈높이에 맞춰 친숙한 예시(예: 실제 숫자 계산이나 시각적 그림 등)를 조금 더 곁들이면 훨씬 알기 쉬운 설명이 됩니다.',
-          '학생의 오개념(발화내용)을 즉각 틀렸다고 지적하기보다, 왜 그렇게 착각했는지 학생의 입장에서 먼저 공감해 주면 정서적 학습 효과가 높아집니다.'
-        ]
-      });
+      return res.status(200).json(buildDemoEvaluation(userAnswer));
     }
 
-    // Call OpenAI API
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -86,13 +110,15 @@ export default async function handler(req: any, res: any) {
         model: 'gpt-4o-mini',
         messages: [
           { role: 'system', content: SYSTEM_PROMPT },
-          { role: 'user', content: buildUserPrompt({
+          {
+            role: 'user',
+            content: buildUserPrompt({
               achievementStandard,
               studentUtterance,
               context: context || '',
               exemplarAnswer: exemplarAnswer || '',
               userAnswer,
-            }) 
+            }),
           },
         ],
         response_format: { type: 'json_object' },
@@ -119,7 +145,7 @@ export default async function handler(req: any, res: any) {
     try {
       const evaluation = JSON.parse(resultString.trim());
       return res.status(200).json(evaluation);
-    } catch (parseError) {
+    } catch {
       console.error('Failed to parse OpenAI JSON output:', resultString);
       return res.status(500).json({
         error: 'OpenAI returned an invalid JSON schema.',
