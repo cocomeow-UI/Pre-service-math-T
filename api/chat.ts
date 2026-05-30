@@ -19,13 +19,26 @@ function hasUsableApiKey(value: string | undefined) {
 function buildDemoEvaluation(userAnswer: string, reason?: string): EvaluationResult {
   const answer = String(userAnswer).trim();
   const meaningfulChars = answer.replace(/[\s.,!?~'"()\[\]{}<>:;|\\/_+=*-]/g, '');
-  const hasMathTerm = /square|root|sqrt|equation|function|factor|expand|sign|graph|vertex|solution|answer|x|y|\d|\u221a|\u00b2|\u03c0/i.test(answer);
-  const acknowledgesStudent = /yes|right|good question|understand|confus|think|first|student|can see/i.test(answer);
-  const hasCorrection = /but|however|because|therefore|so|not|instead|actually/i.test(answer);
-  const hasExample = /example|substitute|plug|check|for instance|when|if|\d/i.test(answer);
+  const longEnoughExplanation = meaningfulChars.length >= 20;
+  const hasMathTerm =
+    /square|root|sqrt|equation|function|factor|expand|sign|graph|vertex|solution|answer|x|y|\d|\u221a|\u00b2|\u03c0|\uc81c\uacf1|\uadfc\ud638|\ub8e8\ud2b8|\ubc29\uc815\uc2dd|\ud568\uc218|\uc778\uc218\ubd84\ud574|\uc804\uac1c|\ubd80\ud638|\uadf8\ub798\ud504|\uaf2d\uc9d3\uc810|\ud574/i.test(
+      answer,
+    );
+  const acknowledgesStudent =
+    /yes|right|good question|understand|confus|think|first|student|can see|\ub9de\uc544|\uadf8\ub807\uac8c \uc0dd\uac01|\ud5f7\uac08|\uc88b\uc740 \uc9c8\ubb38|\uc774\ud574|\uba3c\uc800|\uc0dd\uac01\ud560 \uc218/i.test(
+      answer,
+    );
+  const hasCorrection =
+    /but|however|because|therefore|so|not|instead|actually|\ud558\uc9c0\ub9cc|\uadf8\ub7f0\ub370|\ub2e4\ub9cc|\uc544\ub2c8\ub77c|\uc65c\ub0d0\ud558\uba74|\ub530\ub77c\uc11c|\uadf8\ub798\uc11c/i.test(
+      answer,
+    );
+  const hasExample =
+    /example|substitute|plug|check|for instance|when|if|\uc608\ub97c|\uc608\uc2dc|\ub300\uc785|\ud655\uc778|\ubcf4\uba74|\d/i.test(
+      answer,
+    );
   const isTooShort = meaningfulChars.length < 12;
 
-  if (isTooShort || !hasMathTerm) {
+  if (isTooShort || (!hasMathTerm && !longEnoughExplanation)) {
     return {
       isDemo: true,
       scores: {
@@ -43,7 +56,7 @@ function buildDemoEvaluation(userAnswer: string, reason?: string): EvaluationRes
   }
 
   const lengthScore = Math.min(30, Math.floor(meaningfulChars.length / 4));
-  const curriculum = Math.min(100, 30 + lengthScore + (hasMathTerm ? 25 : 0) + (hasCorrection ? 15 : 0));
+  const curriculum = Math.min(100, 30 + lengthScore + (hasMathTerm ? 25 : 10) + (hasCorrection ? 15 : 0));
   const eyeLevel = Math.min(100, 25 + lengthScore + (acknowledgesStudent ? 20 : 0) + (hasExample ? 20 : 0));
   const flow = Math.min(100, 25 + lengthScore + (acknowledgesStudent ? 15 : 0) + (hasCorrection ? 20 : 0));
 
