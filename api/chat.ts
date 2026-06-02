@@ -72,6 +72,26 @@ function getApiKey() {
   return key;
 }
 
+function normalizeAnswer(answer: string) {
+  return answer.normalize('NFKC').replace(/\s+/g, ' ').trim();
+}
+
+function isExemplarAnswer(userAnswer: string, exemplarAnswer: string) {
+  return normalizeAnswer(userAnswer) === normalizeAnswer(exemplarAnswer);
+}
+
+function getPerfectEvaluation(): EvaluationResult {
+  return {
+    scores: {
+      curriculum: 100,
+      eyeLevel: 100,
+      flow: 100,
+    },
+    strengths: ['\uBAA8\uBC94\uB2F5\uC548\uACFC \uB3D9\uC77C\uD55C \uC124\uBA85\uC73C\uB85C, \uC138 \uAC00\uC9C0 \uD3C9\uAC00 \uAE30\uC900\uC744 \uBAA8\uB450 \uCDA9\uC871\uD588\uC2B5\uB2C8\uB2E4.'],
+    improvements: [],
+  };
+}
+
 function parseEvaluation(content: string): EvaluationResult {
   const cleaned = content
     .trim()
@@ -130,6 +150,10 @@ export default async function handler(req: any, res: any) {
     return sendJson(res, 400, {
       error: '평가에 필요한 데이터가 부족합니다.',
     });
+  }
+
+  if (exemplarAnswer && isExemplarAnswer(userAnswer, exemplarAnswer)) {
+    return sendJson(res, 200, getPerfectEvaluation());
   }
 
   const apiKey = getApiKey();
